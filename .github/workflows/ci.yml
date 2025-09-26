@@ -1,0 +1,45 @@
+name: Test and build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+    - name: Run the test suite
+      run: cargo test --all-features
+  linting:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+        components: clippy, rustfmt
+    - name: Run clippy linter
+      run: cargo clippy --all-targets
+    - name: Run formatter
+      run: cargo fmt
+    - name: Check if any files weren't properly formatted
+      run: |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "Incorrectly formatted files detected, please re-format and commit the change"
+          git status
+          exit 1
+        fi
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+    - name: Run the build
+      run: cargo build
