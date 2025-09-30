@@ -1,712 +1,256 @@
-use std::{cmp, io};
+mod patcher;
+
+use rayon::prelude::*;
+use std::{fs, io, path};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("Failed to read the input protobuf file: {0}")]
-    Read(io::Error),
-    #[error("Failed to write the output protobuf file: {0}")]
-    Write(io::Error),
-    #[error("Failed to parse the protobuf file: Invalid parser state encountered")]
-    InvalidState,
+    #[error("Failed to read the Protobuf files: {0}")]
+    WalkDir(#[from] walkdir::Error),
+    #[error("Failed to resolve the protobuf path: {0}")]
+    PathResolve(#[from] path::StripPrefixError),
+    #[error("Failed to open the source file `{1}`: {0}")]
+    OpenSourceFile(io::Error, path::PathBuf),
+    #[error("Failed to create the patched file `{1}`: {0}")]
+    OpenTempFile(io::Error, path::PathBuf),
+    #[error("Failed to create the destination subdirectory `{1}` for patched files: {0}")]
+    CreatePatchedSubdir(io::Error, path::PathBuf),
+    #[error("Failed to process the `{1}` protobuf file: {0}")]
+    PatchEdition(patcher::Error, path::PathBuf),
 }
 
-#[derive(cmp::PartialEq, Debug)]
-pub enum Outcome {
-    Untouched,
-    Replaced,
-}
+pub fn patch_protos(
+    src_dir: &path::Path,
+    dst_dir: &path::Path,
+) -> Result<Vec<path::PathBuf>, Error> {
+    let files = walkdir::WalkDir::new(src_dir)
+        .contents_first(false)
+        .into_iter()
+        .try_fold(vec![], |mut files, entry| -> Result<_, Error> {
+            let path = entry?.path().to_owned();
 
-enum State {
-    None,
-    CommentPending(usize, CommentContext),
-    CommentSingleLine(usize, CommentContext),
-    CommentMultiLine(usize, CommentContext),
-    CommentMultiLineEndPending(usize, CommentContext),
-    Edition(usize, usize),
-    EditionWhitespacePost(usize),
-    EditionEqual(usize),
-    EditionEqualWhitespacePost(usize),
-    EditionOpenQuote(usize),
-    EditionValueEscape(usize),
-    EditionValue(usize),
-    EditionCloseQuote(usize),
-    Complete(Option<(usize, usize)>),
-}
+            if path.is_dir() {
+                let dst_path = dst_dir.join(path.strip_prefix(src_dir)?);
 
-impl State {
-    fn next_token(self, ch: u8, pos: usize) -> Result<Self, Error> {
-        Ok(match self {
-            Self::Complete(_) => self,
-            Self::None => match ch {
-                b'e' => Self::Edition(pos, 0),
-                b'/' => Self::CommentPending(pos, self.try_into()?),
-                c if c.is_ascii_whitespace() => Self::None,
-                _ => Self::Complete(None),
-            },
-            Self::CommentPending(start_at, ctx) => match ch {
-                b'/' => Self::CommentSingleLine(start_at, ctx),
-                b'*' => Self::CommentMultiLine(start_at, ctx),
-                _ => Self::Complete(None),
-            },
-            Self::CommentSingleLine(start_at, ctx) => match ch {
-                b'\n' => ctx.into(),
-                _ => Self::CommentSingleLine(start_at, ctx),
-            },
-            Self::CommentMultiLine(start_at, ctx) => match ch {
-                b'*' => Self::CommentMultiLineEndPending(start_at, ctx),
-                _ => Self::CommentMultiLine(start_at, ctx),
-            },
-            Self::CommentMultiLineEndPending(start_at, ctx) => match ch {
-                b'/' => ctx.into(),
-                _ => Self::CommentMultiLine(start_at, ctx),
-            },
-            Self::Edition(start_at, idx) => match (idx, ch) {
-                (0, b'd') | (1, b'i') | (2, b't') | (3, b'i') | (4, b'o') | (5, b'n') => {
-                    Self::Edition(start_at, idx + 1)
-                }
-                (6, b'=') => Self::EditionEqual(start_at),
-                (6, b'/') => Self::CommentPending(start_at, self.try_into()?),
-                (6, c) if c.is_ascii_whitespace() => Self::EditionWhitespacePost(start_at),
-                _ => Self::Complete(None),
-            },
-            Self::EditionWhitespacePost(start_at) => match ch {
-                b'=' => Self::EditionEqual(start_at),
-                b'/' => Self::CommentPending(start_at, self.try_into()?),
-                c if c.is_ascii_whitespace() => Self::EditionWhitespacePost(start_at),
-                _ => Self::Complete(None),
-            },
-            Self::EditionEqual(start_at) | Self::EditionEqualWhitespacePost(start_at) => match ch {
-                b'"' => Self::EditionOpenQuote(start_at),
-                b'/' => Self::CommentPending(start_at, self.try_into()?),
-                c if c.is_ascii_whitespace() => Self::EditionEqualWhitespacePost(start_at),
-                _ => Self::Complete(None),
-            },
-            Self::EditionOpenQuote(start_at) | Self::EditionValue(start_at) => match ch {
-                b'"' => Self::EditionCloseQuote(start_at),
-                b'\\' => Self::EditionValueEscape(start_at),
-                _ => Self::EditionValue(start_at),
-            },
-            Self::EditionValueEscape(start_at) => Self::EditionValue(start_at),
-            Self::EditionCloseQuote(start_at) => Self::Complete(Some((start_at, pos))),
+                println!("Creating a subdirectory: {}", dst_path.display());
+
+                fs::create_dir_all(&dst_path)
+                    .map_err(|e| Error::CreatePatchedSubdir(e, dst_path))?;
+            } else {
+                files.push(path);
+            }
+
+            Ok(files)
+        })?;
+
+    files
+        .par_iter()
+        .filter(|file| file.extension().is_some_and(|ext| ext == "proto"))
+        .map(|proto| {
+            let path = proto.strip_prefix(src_dir)?;
+
+            println!("Processing: {}", path.display());
+
+            let src = fs::File::open(proto).map_err(|e| Error::OpenSourceFile(e, proto.clone()))?;
+
+            let output = dst_dir.join(path);
+            let dst = fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .create_new(true)
+                .open(&output)
+                .map_err(|e| Error::OpenTempFile(e, output.clone()))?;
+
+            patcher::patch_edition(io::BufReader::new(src), dst)
+                .map_err(|e| Error::PatchEdition(e, proto.to_owned()))?;
+
+            Ok(output)
         })
-    }
-
-    fn get_bounds(&self) -> Option<(usize, Option<usize>)> {
-        match self {
-            &Self::Complete(None) | Self::None => None,
-            &Self::Complete(Some((to, from))) => Some((to, Some(from))),
-            &Self::CommentPending(to, _)
-            | &Self::CommentSingleLine(to, _)
-            | &Self::CommentMultiLine(to, _)
-            | &Self::CommentMultiLineEndPending(to, _)
-            | &Self::Edition(to, _)
-            | &Self::EditionWhitespacePost(to)
-            | &Self::EditionEqual(to)
-            | &Self::EditionEqualWhitespacePost(to)
-            | &Self::EditionOpenQuote(to)
-            | &Self::EditionValueEscape(to)
-            | &Self::EditionValue(to)
-            | &Self::EditionCloseQuote(to) => Some((to, None)),
-        }
-    }
-}
-
-enum CommentContext {
-    None,
-    EditionWhitespacePost(usize),
-    EditionEqual(usize),
-    EditionEqualWhitespacePost(usize),
-}
-
-impl From<CommentContext> for State {
-    fn from(value: CommentContext) -> Self {
-        match value {
-            CommentContext::None => Self::None,
-            CommentContext::EditionWhitespacePost(pos) => Self::EditionWhitespacePost(pos),
-            CommentContext::EditionEqual(pos) => Self::EditionEqual(pos),
-            CommentContext::EditionEqualWhitespacePost(pos) => {
-                Self::EditionEqualWhitespacePost(pos)
-            }
-        }
-    }
-}
-
-impl TryFrom<State> for CommentContext {
-    type Error = Error;
-
-    fn try_from(value: State) -> Result<Self, Self::Error> {
-        match value {
-            State::None => Ok(Self::None),
-            State::EditionWhitespacePost(pos) => Ok(Self::EditionWhitespacePost(pos)),
-            State::EditionEqual(pos) => Ok(Self::EditionEqual(pos)),
-            State::EditionEqualWhitespacePost(pos) => Ok(Self::EditionEqualWhitespacePost(pos)),
-            State::Edition(pos, 6) => Ok(Self::EditionWhitespacePost(pos)),
-            _ => Err(Error::InvalidState),
-        }
-    }
-}
-
-pub fn patch_edition(mut src: impl io::BufRead, mut dst: impl io::Write) -> Result<Outcome, Error> {
-    let mut line = Vec::with_capacity(1 << 14);
-    // let mut line = Vec::with_capacity(30|29);
-    let mut state = State::None;
-    let mut outcome = Outcome::Untouched;
-
-    while src.read_until(b'\n', &mut line).map_err(Error::Read)? > 0 {
-        state = line
-            .iter()
-            .enumerate()
-            .try_fold(state, |state, (pos, &ch)| state.next_token(ch, pos))?;
-
-        match state.get_bounds() {
-            Some((to, Some(from))) => {
-                dst.write_all(&line[0..to]).map_err(Error::Write)?;
-                dst.write_all(r#"syntax = "proto3""#.as_bytes())
-                    .map_err(Error::Write)?;
-                dst.write_all(&line[from..]).map_err(Error::Write)?;
-
-                line.clear();
-
-                outcome = Outcome::Replaced;
-            }
-            Some((to, None)) => {
-                dst.write_all(&line[0..to]).map_err(Error::Write)?;
-
-                line.drain(0..to);
-            }
-            None => {
-                dst.write_all(&line).map_err(Error::Write)?;
-
-                line.clear();
-            }
-        }
-
-        state = match state {
-            State::Complete(Some(_)) => State::Complete(None),
-            State::Complete(None) => state,
-            _ => State::None,
-        };
-    }
-
-    Ok(outcome)
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io;
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    use tempfile::tempdir;
 
     #[test]
-    fn copy_unchanged() {
-        let input = r#"syntax = "proto3";
+    fn patch_proto_fails_if_it_can_not_read_a_source_directory() {
+        let src_dir = tempdir().expect("Failed to create a test source directory");
 
-package crabs;
+        let metadata =
+            fs::metadata(src_dir.path()).expect("Failed to read test source directory metadata");
+        let mut perms = metadata.permissions();
 
-message Ferris {
-  string type = 1;
-}
-"#;
+        perms.set_mode(0o000);
 
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
+        fs::set_permissions(src_dir.path(), perms)
+            .expect("Failed to update test source directory permissions");
+        let dst_dir = tempdir().expect("Failed to create a test destination directory");
 
-        assert_eq!(
-            super::Outcome::Untouched,
-            outcome,
-            "Expected the file to be copied without changes",
+        let err = super::patch_protos(src_dir.path(), dst_dir.path())
+            .expect_err("Patcher didn't fail given unreadable directory");
+
+        assert!(
+            matches!(err, super::Error::WalkDir { .. }),
+            "Expected `patch_protos()` to fail with `Error::WalkDir` variant"
         );
 
-        let output = String::from_utf8(output).expect("The output string is corrupted");
-
-        assert_eq!(input, output, "");
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.starts_with("Failed to read the Protobuf files: "),
+            "Expected `patch_protos()` to fail with with:\n> Failed to read the Protobuf files:\nmessage, got:\n> {err_msg}",
+        );
     }
 
     #[test]
-    fn copy_replace() {
-        let input = r#"edition = "2023";
+    fn patch_proto_fails_if_it_can_not_create_a_destination_subdirectory() {
+        let src_dir = tempdir().expect("Failed to create a test source directory");
 
-package crabs;
+        let bad_dir = src_dir.path().join("bad_subdir");
+        fs::create_dir_all(bad_dir).expect("Failed to create a test source subdirectory");
 
-message Ferris {
-  string type = 1;
-}
-"#;
+        let dst_dir = tempdir().expect("Failed to create a test destination directory");
 
-        let mut output = Vec::new();
+        let metadata = fs::metadata(dst_dir.path())
+            .expect("Failed to read test destination directory metadata");
+        let mut perms = metadata.permissions();
 
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
+        perms.set_readonly(true);
 
-        let outcome = result.expect("Faled to copy the data");
+        fs::set_permissions(dst_dir.path(), perms)
+            .expect("Failed to update test destination directory permissions");
 
-        assert_eq!(
-            super::Outcome::Replaced,
-            outcome,
-            "Expected the edition to be replaced with syntax"
+        let err = super::patch_protos(src_dir.path(), dst_dir.path())
+            .expect_err("Patcher didn't fail given unreadable directory");
+
+        assert!(matches!(err, super::Error::CreatePatchedSubdir { .. }));
+
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.starts_with("Failed to create the destination subdirectory "),
+            "Expected `patched_protos()` to fail with:\n> Failed to create the destination subdirectory\n message, got:\n> {err_msg}"
         );
+    }
 
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
+    #[test]
+    fn patch_proto_fails_if_it_can_not_read_a_source_file() {
+        let src_dir = tempdir().expect("Failed to create a test source directory");
 
-        assert_eq!(
+        let bad_file = src_dir.path().join("bad.proto");
+        fs::File::create_new(&bad_file).expect("Failed to create a test protobuf file");
+
+        let metadata = fs::metadata(&bad_file).expect("Failed to read a test proto file metadata");
+        let mut perms = metadata.permissions();
+
+        perms.set_mode(0o000);
+
+        fs::set_permissions(bad_file, perms)
+            .expect("Failed to set permissions on the test proto file");
+
+        let dst_dir = tempdir().expect("Failed to create a test destination directory");
+
+        let err = super::patch_protos(src_dir.path(), dst_dir.path())
+            .expect_err("Patcher didn't fail given unreadable proto file");
+
+        assert!(matches!(err, super::Error::OpenSourceFile { .. }));
+
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.starts_with("Failed to open the source file"),
+            "Expected `patched_protos()` to fail with:\n> Failed to open the source file\n message, got:\n> {err_msg}"
+        );
+    }
+
+    #[test]
+    fn patch_proto_fails_if_it_can_not_create_a_patched_file() {
+        let src_dir = tempdir().expect("Failed to create a test source directory");
+        let src_file_path = src_dir.path().join("test.proto");
+
+        fs::write(
+            src_file_path,
             r#"syntax = "proto3";
 
-package crabs;
+package test;
 
-message Ferris {
-  string type = 1;
+message Foo {
 }
 "#,
-            output,
+        )
+        .expect("Failed to create a test protobuf file");
+
+        let dst_dir = tempdir().expect("Failed to create a test destination directory");
+
+        let metadata = fs::metadata(dst_dir.path())
+            .expect("Failed to read a test destination directory metadata");
+        let mut perms = metadata.permissions();
+
+        perms.set_mode(0o000);
+
+        fs::set_permissions(dst_dir.path(), perms)
+            .expect("Failed to set permissions on the test destination directory");
+
+        let err = super::patch_protos(src_dir.path(), dst_dir.path())
+            .expect_err("Patcher didn't fail given unreadable proto file");
+
+        assert!(matches!(err, super::Error::OpenTempFile { .. }));
+
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.starts_with("Failed to create the patched file"),
+            "Expected `patched_protos()` to fail with:\n> Failed to create the patched file\n message, got:\n> {err_msg}"
         );
     }
 
     #[test]
-    fn copy_unchanged_ignoring_comments() {
-        let input = r#"// This is a comment above the edition
-syntax = "proto2";
+    fn patch_proto_successfully_handles_file_generation() {
+        let src_dir = tempdir().expect("Failed to create a test source directory");
+        let src_file_path = src_dir.path().join("test.proto");
 
-package crabs;
+        fs::write(
+            src_file_path,
+            r#"edition = "2023";
 
-message Ferris {
-  string type = 1;
-}
-"#;
+package test;
 
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
-
-        assert_eq!(
-            super::Outcome::Untouched,
-            outcome,
-            "Expected the file to be copied without changes",
-        );
-
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
-
-        assert_eq!(
-            r#"// This is a comment above the edition
-syntax = "proto2";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
+message Foo {
 }
 "#,
-            output,
-        );
-    }
+        )
+        .expect("Failed to create a test protobuf file");
 
-    #[test]
-    fn copy_replace_ignoring_comments() {
-        let input = r#"/* This is a comment above the edition
-and it is a multi-line one */
-edition = "2023";
+        let ignore_file_path = src_dir.path().join("README.md");
+        fs::write(
+            ignore_file_path,
+            "This file should be ignored by the patcher",
+        )
+        .expect("Failed to create an ignorable source file");
 
-package crabs;
+        let dst_dir = tempdir().expect("Failed to create a test destination directory");
 
-message Ferris {
-  string type = 1;
-}
-"#;
-
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
+        let result = super::patch_protos(src_dir.path(), dst_dir.path())
+            .expect("Patcher failed to process proto files");
 
         assert_eq!(
-            super::Outcome::Replaced,
-            outcome,
-            "Expected the edition to be replaced with syntax"
+            result.len(),
+            1,
+            "Expected result to contain a single patched proto file path"
         );
 
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
+        let patched =
+            fs::read_to_string(&result[0]).expect("Failed to read the patched proto filed");
 
         assert_eq!(
-            r#"/* This is a comment above the edition
-and it is a multi-line one */
-syntax = "proto3";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#,
-            output,
-        );
-    }
-
-    #[test]
-    fn copy_unchanged_ignoring_whitespace() {
-        let input = r#"
-  syntax = "proto3";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#;
-
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
-
-        assert_eq!(
-            super::Outcome::Untouched,
-            outcome,
-            "Expected the file to be copied without changes",
-        );
-
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
-
-        assert_eq!(
-            r#"
-  syntax = "proto3";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#,
-            output,
-        );
-    }
-
-    #[test]
-    fn copy_replace_ignoring_whitespace() {
-        let input = r#"
-  edition = "2023";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#;
-
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
-
-        assert_eq!(
-            super::Outcome::Replaced,
-            outcome,
-            "Expected the edition to be replaced with syntax"
-        );
-
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
-
-        assert_eq!(
-            r#"
-  syntax = "proto3";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#,
-            output,
-        );
-    }
-
-    #[test]
-    fn copy_unchanged_ignoring_edition_inside_message() {
-        let input = r#"syntax = "proto3";
-
-package crabs;
-
-message Ferris {
-  string edition = 1;
-}
-"#;
-
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
-
-        assert_eq!(
-            super::Outcome::Untouched,
-            outcome,
-            "Expected the file to be copied without changes",
-        );
-
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
-
-        assert_eq!(
+            patched,
             r#"syntax = "proto3";
 
-package crabs;
+package test;
 
-message Ferris {
-  string edition = 1;
+message Foo {
 }
 "#,
-            output,
-        );
-    }
-
-    #[test]
-    fn copy_replace_ignore_same_line_comment() {
-        let input = r#"/* This is a weird case of the comment */ edition = "2023";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#;
-
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
-
-        assert_eq!(
-            super::Outcome::Replaced,
-            outcome,
-            "Expected the edition to be replaced with syntax"
-        );
-
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
-
-        assert_eq!(
-            r#"/* This is a weird case of the comment */ syntax = "proto3";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#,
-            output,
-        );
-    }
-
-    #[test]
-    fn copy_unchanged_ignoring_same_line_comment() {
-        let input = r#"/* This is a weird case of the comment */ syntax = "proto3";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#;
-
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
-
-        assert_eq!(
-            super::Outcome::Untouched,
-            outcome,
-            "Expected the file to be copied without changes",
-        );
-
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
-
-        assert_eq!(
-            r#"/* This is a weird case of the comment */ syntax = "proto3";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#,
-            output,
-        );
-    }
-
-    #[test]
-    fn copy_unchanged_ignoring_edition_inside_comment() {
-        let input = r#"/* We can't yet upgrade to the
-edition = "2023";
-because not every language compiler supports it.*/
-syntax = "proto3";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#;
-
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
-
-        assert_eq!(
-            super::Outcome::Untouched,
-            outcome,
-            "Expected the file to be copied without changes",
-        );
-
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
-
-        assert_eq!(
-            r#"/* We can't yet upgrade to the
-edition = "2023";
-because not every language compiler supports it.*/
-syntax = "proto3";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#,
-            output,
-        );
-    }
-
-    #[test]
-    fn copy_replace_ignoring_edition_inside_comment() {
-        let input = r#"/* We recently upgraded to the
-edition = "2023";
-* but we have tooling that replaces it back to
-syntax = "proto3";
-on as needed basis for languages that don't have proper support */
-edition = "2023";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#;
-
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
-
-        assert_eq!(
-            super::Outcome::Replaced,
-            outcome,
-            "Expected the edition to be replaced with syntax",
-        );
-
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
-
-        assert_eq!(
-            r#"/* We recently upgraded to the
-edition = "2023";
-* but we have tooling that replaces it back to
-syntax = "proto3";
-on as needed basis for languages that don't have proper support */
-syntax = "proto3";
-
-package crabs;
-
-message Ferris {
-  string type = 1;
-}
-"#,
-            output,
-        );
-    }
-
-    #[test]
-    fn copy_replace_no_whitespace_in_edition() {
-        let input = r#"edition="2023";
-
-package crabs;
-
-message Ferris {}
-"#;
-
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
-
-        assert_eq!(
-            super::Outcome::Replaced,
-            outcome,
-            "Expected the edition to be replaced with syntax",
-        );
-
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
-
-        assert_eq!(
-            r#"syntax = "proto3";
-
-package crabs;
-
-message Ferris {}
-"#,
-            output,
-        );
-    }
-
-    #[test]
-    fn copy_replace_multiple_whitespace_in_edition() {
-        let input = r#"edition =		"2023" ;
-
-package crabs;
-
-message Ferris {}
-"#;
-
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
-
-        assert_eq!(
-            super::Outcome::Replaced,
-            outcome,
-            "Expected the edition to be replaced with syntax",
-        );
-
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
-
-        assert_eq!(
-            r#"syntax = "proto3" ;
-
-package crabs;
-
-message Ferris {}
-"#,
-            output,
-        );
-    }
-
-    #[test]
-    fn copy_replace_with_comments_in_edition() {
-        let input = r#"edition/* Edition comment */// Weird comment here
-= /*This may be 2024 at some point*/"2023"
-// Needs to be replaced with syntax for now tho.
-;
-
-package crabs;
-
-message Ferris {}
-"#;
-
-        let mut output = Vec::new();
-        let result = super::patch_edition(io::BufReader::new(input.as_bytes()), &mut output);
-        let outcome = result.expect("Faled to copy the data");
-
-        assert_eq!(
-            super::Outcome::Replaced,
-            outcome,
-            "Expected the edition to be replaced with syntax",
-        );
-
-        let output = String::from_utf8(output).expect("The resulting copy is corrupted");
-
-        assert_eq!(
-            r#"syntax = "proto3"
-// Needs to be replaced with syntax for now tho.
-;
-
-package crabs;
-
-message Ferris {}
-"#,
-            output,
+            "The patched file content is invalid"
         );
     }
 }
