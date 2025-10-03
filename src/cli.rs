@@ -2,13 +2,30 @@ use std::{fs, io, path};
 
 use crate::modgen;
 
+/// Compile protobuf files into properly structured Rust code with modules using the Prost compiler.
+#[derive(clap::Parser)]
+#[command(about)]
 pub struct Args {
+    /// Whether to generate the gRPC client code
+    #[arg(long, default_value_t = false)]
     build_client: bool,
+    /// Whether to generate the gRPC server stubs
+    #[arg(long, default_value_t = false)]
     build_server: bool,
-    with_well_known_type: bool,
+    /// Specify whether to build the well-known types
+    #[arg(long, default_value_t = false)]
+    with_well_known_types: bool,
+    /// Add a directory to the Protobuf import path (can be specified multiple times)
+    #[arg(long, short = 'I')]
     include_path: Vec<path::PathBuf>,
+    /// Specify the output path for the compiled files
+    #[arg(long, default_value = "out")]
     output: path::PathBuf,
+    /// Specify the source path of the protobuf files to compile
+    #[arg(long, default_value = "proto")]
     source: path::PathBuf,
+    /// Specify a path where to create a temporary working directory
+    #[arg(long)]
     temp_dir: Option<path::PathBuf>,
 }
 
@@ -78,7 +95,7 @@ pub fn run(args: Args) -> Result<(), Error> {
         .build_client(args.build_client)
         .build_server(args.build_server)
         .build_transport(args.build_client || args.build_server)
-        .compile_well_known_types(args.with_well_known_type)
+        .compile_well_known_types(args.with_well_known_types)
         .out_dir(&compiled_files_dir)
         .compile_protos(&patched_files, &includes)
         .map_err(Error::CompileProto)?;
@@ -101,7 +118,7 @@ mod tests {
         let args = super::Args {
             build_client: true,
             build_server: true,
-            with_well_known_type: true,
+            with_well_known_types: true,
             include_path: vec![],
             output: dst.path().to_owned(),
             source: src,
