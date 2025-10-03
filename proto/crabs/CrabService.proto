@@ -1,0 +1,29 @@
+syntax = "proto2";
+
+package crabs;
+
+import "crabs/Ferris.proto";
+import "crabs/sponge_bob/BetsyKrabs.proto";
+import "crabs/sponge_bob/MrKrabs.proto";
+import "crabs/disney/ariel/Sebastian.proto";
+
+service CrabService {
+  rpc GetFerris (GetFerrisReqProto) returns (Ferris) {}
+  rpc GetMrKrabs(GetMrKrabsReqProto) returns (sponge_bob.MrKrabs) {}
+  rpc GetSebastian(GetSebastianReqProto) returns (disney.ariel.Sebastian) {}
+  rpc GetBetsyKrabs(GetBetsyKrabsReqProto) returns (sponge_bob.BetsyKrabsProto) {}
+}
+
+message GetFerrisReqProto {
+  required FerrisType type = 1;
+}
+
+message GetMrKrabsReqProto {
+  required string state = 1;
+}
+
+message GetSebastianReqProto {
+  required string mood = 1;
+}
+
+message GetBetsyKrabsReqProto {}

@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package crabs;
+
+enum FerrisType {
+  UNKNOWN = 0;
+  ORIGINAL = 1;
+  FLAT = 2;
+  EXTRA_CUTE = 3;
+  HAPPY = 4;
+}
+
+message Ferris {
+  FerrisType type = 1;
+}

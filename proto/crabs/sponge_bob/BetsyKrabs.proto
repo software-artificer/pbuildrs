@@ -1,0 +1,7 @@
+/* Long comment kinda
+ * multiple lines actually */
+edition = "2023";
+
+package crabs.sponge_bob;
+
+message BetsyKrabsProto {}

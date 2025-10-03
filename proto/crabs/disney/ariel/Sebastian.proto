@@ -1,0 +1,8 @@
+// This is a comment just to make things harder
+edition = "2023";
+
+package crabs.disney.ariel;
+
+message Sebastian {
+  string mood = 1;
+}
