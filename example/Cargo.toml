@@ -1,0 +1,15 @@
+[package]
+name = "example"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+prost = { version = "0.14.1", default-features = false, features = ["derive"] }
+tonic = { version = "0.14.2", default-features = false, features = ["codegen", "transport"] }
+tonic-prost = { version = "0.14.2", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1.47.1", default-features = false, features = ["rt-multi-thread"] }
+tokio-util = { version = "0.7.16", default-features = false }
+tokio-stream = { version = "0.1.17", default-features = false }
+tonic = { version = "0.14.2", default-features = false, features = ["router"] }
