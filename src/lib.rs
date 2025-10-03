@@ -1,3 +1,4 @@
+pub mod modgen;
 mod patcher;
 
 use rayon::prelude::*;
