@@ -54,6 +54,8 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     needs:
     - build-linux
     - build-macos
@@ -66,7 +68,10 @@ jobs:
         name: x86_64-linux
     - name: Create a GitHub release
       run: |
-        RELEASE_NAME=$(git tag -l v0.0.1 --format='%(contents)' | head -1)
-        echo gh release create --draft --generate-notes --prerelease --title "$RELEASE_NAME" \
+        gh release create --draft --generate-notes --prerelease \
+          --title "Release ${{ github.ref_name }} draft" \
+          --repo software-artificer/pbuildrs \
           "pbuildrs-${{ github.ref_name }}-aarch64-darwin.zip" \
           "pbuildrs-${{ github.ref_name }}-x86_64-linux.tar.bz2"
+      env:
+        GH_TOKEN: ${{ github.token }}
