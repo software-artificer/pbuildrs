@@ -33,14 +33,14 @@ impl Tree {
     fn push(mut self, path: path::PathBuf) -> Result<Self, Error> {
         let file_name = path
             .file_name()
-            .ok_or_else(|| Error::FileName(path.to_owned()))?;
+            .ok_or_else(|| Error::FileName(path.to_path_buf()))?;
         let file_name = path::PathBuf::from(file_name);
 
         let mut package = file_name.with_extension("");
         let mut parts = vec![];
 
         while let Some(ext) = package.extension() {
-            parts.push(ext.to_owned());
+            parts.push(ext.to_os_string());
 
             package.set_extension("");
         }
@@ -53,7 +53,7 @@ impl Tree {
     }
 
     fn compile(self, dst: &path::Path) -> Result<(), Error> {
-        self.root.compile(dst.to_owned())
+        self.root.compile(dst.to_path_buf())
     }
 }
 
