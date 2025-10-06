@@ -4,7 +4,7 @@ use crate::modgen;
 
 /// Compile protobuf files into properly structured Rust code with modules using the Prost compiler.
 #[derive(clap::Parser)]
-#[command(about)]
+#[command(version, about)]
 pub struct Args {
     /// Whether to generate the gRPC client code
     #[arg(long, default_value_t = false)]
