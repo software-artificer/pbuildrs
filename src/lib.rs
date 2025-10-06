@@ -7,10 +7,10 @@ use std::{fs, io, path};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("Failed to read the Protobuf files: {0}")]
-    WalkDir(#[from] walkdir::Error),
-    #[error("Failed to resolve the protobuf path: {0}")]
-    PathResolve(#[from] path::StripPrefixError),
+    #[error("Failed to read the Protobuf files from `{1}`: {0}")]
+    WalkDir(walkdir::Error, path::PathBuf),
+    #[error("Failed to resolve the protobuf path `{1}`: {0}")]
+    PathResolve(path::StripPrefixError, path::PathBuf),
     #[error("Failed to open the source file `{1}`: {0}")]
     OpenSourceFile(io::Error, path::PathBuf),
     #[error("Failed to create the patched file `{1}`: {0}")]
@@ -29,10 +29,16 @@ pub fn patch_protos(
         .contents_first(false)
         .into_iter()
         .try_fold(vec![], |mut files, entry| -> Result<_, Error> {
-            let path = entry?.path().to_owned();
+            let path = entry
+                .map_err(|e| Error::WalkDir(e, src_dir.to_path_buf()))?
+                .path()
+                .to_path_buf();
 
             if path.is_dir() {
-                let dst_path = dst_dir.join(path.strip_prefix(src_dir)?);
+                let dst_path = dst_dir.join(
+                    path.strip_prefix(src_dir)
+                        .map_err(|e| Error::PathResolve(e, src_dir.to_path_buf()))?,
+                );
 
                 println!("Creating a subdirectory: {}", dst_path.display());
 
@@ -49,7 +55,9 @@ pub fn patch_protos(
         .par_iter()
         .filter(|file| file.extension().is_some_and(|ext| ext == "proto"))
         .map(|proto| {
-            let path = proto.strip_prefix(src_dir)?;
+            let path = proto
+                .strip_prefix(src_dir)
+                .map_err(|e| Error::PathResolve(e, src_dir.to_path_buf()))?;
 
             println!("Processing: {}", path.display());
 
@@ -64,7 +72,7 @@ pub fn patch_protos(
                 .map_err(|e| Error::OpenTempFile(e, output.clone()))?;
 
             patcher::patch_edition(io::BufReader::new(src), dst)
-                .map_err(|e| Error::PatchEdition(e, proto.to_owned()))?;
+                .map_err(|e| Error::PatchEdition(e, proto.to_path_buf()))?;
 
             Ok(output)
         })
@@ -101,8 +109,8 @@ mod tests {
 
         let err_msg = err.to_string();
         assert!(
-            err_msg.starts_with("Failed to read the Protobuf files: "),
-            "Expected `patch_protos()` to fail with with:\n> Failed to read the Protobuf files:\nmessage, got:\n> {err_msg}",
+            err_msg.starts_with("Failed to read the Protobuf files from `"),
+            "Expected `patch_protos()` to fail with with:\n> Failed to read the Protobuf files from `\nmessage, got:\n> {err_msg}",
         );
     }
 
