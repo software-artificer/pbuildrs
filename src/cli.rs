@@ -21,12 +21,12 @@ pub struct Args {
     /// Specify the output path for the compiled files
     #[arg(long, default_value = "out")]
     output: path::PathBuf,
-    /// Specify the source path of the protobuf files to compile
-    #[arg(long, default_value = "proto")]
-    source: path::PathBuf,
     /// Specify a path where to create a temporary working directory
     #[arg(long)]
     temp_dir: Option<path::PathBuf>,
+    /// Specify the source path of the protobuf files to compile
+    #[arg()]
+    source: path::PathBuf,
 }
 
 #[derive(thiserror::Error, Debug)]
