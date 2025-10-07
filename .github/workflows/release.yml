@@ -70,7 +70,7 @@ jobs:
       run: |
         gh release create ${{ github.ref_name }} --draft --generate-notes \
           --prerelease --title "Release ${{ github.ref_name }} draft" \
-          --repo software-artificer/pbuildrs \
+          --repo "${{ github.repository }}" \
           "pbuildrs-${{ github.ref_name }}-aarch64-darwin.zip" \
           "pbuildrs-${{ github.ref_name }}-x86_64-linux.tar.bz2"
       env:
