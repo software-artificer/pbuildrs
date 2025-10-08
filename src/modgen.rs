@@ -1,7 +1,7 @@
 use std::{
     collections, ffi, fs,
     io::{self, Write},
-    os::unix::ffi::OsStrExt,
+    os::unix::ffi::{OsStrExt, OsStringExt},
     path,
 };
 
@@ -97,7 +97,7 @@ impl Node {
         let mut children = self.children.into_iter().try_fold(
             vec![],
             |mut children, (module, node)| -> Result<_, Error> {
-                node.compile(dst.join(&module))?;
+                node.compile(dst.join(sanitize_path(&module)))?;
 
                 children.push(module);
 
@@ -142,6 +142,15 @@ impl Node {
         }
 
         Ok(())
+    }
+}
+
+#[inline(always)]
+fn sanitize_path(part: &ffi::OsStr) -> ffi::OsString {
+    if part.as_bytes().starts_with(b"r#") {
+        ffi::OsString::from_vec(part.as_bytes()[2..].to_vec())
+    } else {
+        part.to_os_string()
     }
 }
 
@@ -412,6 +421,34 @@ mod tests {
             matches!(err, Err(super::Error::ReadSourceFile { .. })),
             "Expected `Err(Error::ReadSourceFile)`, got: `{:?}`",
             err
+        );
+    }
+
+    #[test]
+    fn modularize_handles_keywords_properly() {
+        let dst =
+            tempfile::TempDir::new().expect("Failed to create destination directory for tests");
+
+        let src = tempfile::TempDir::new().expect("Failed to create source directory for tests");
+
+        let keyword_file = src.path().join("foo.r#type.bar.rs");
+        fs::write(keyword_file, b"struct Bar;\n")
+            .expect("Failed to create a keyword source file for tests");
+
+        super::modularize(src.path(), dst.path()).expect("Failed to modularize the files");
+
+        let output = fs::read_to_string(dst.path().join("foo/type/bar/mod.rs"))
+            .expect("Unable to read output file");
+        assert_eq!(
+            "struct Bar;\n", output,
+            "Invalid contents of the output output module `bar`",
+        );
+
+        let output =
+            fs::read_to_string(dst.path().join("foo/mod.rs")).expect("Unable to read output file");
+        assert_eq!(
+            "pub mod r#type;\n", output,
+            "Invalid contents of the output output module `foo`",
         );
     }
 }
