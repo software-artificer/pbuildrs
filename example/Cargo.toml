@@ -3,10 +3,14 @@ name = "example"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+client = ["dep:tonic", "dep:tonic-prost"]
+server = ["dep:tonic", "dep:tonic-prost"]
+
 [dependencies]
 prost = { version = "0.14.1", default-features = false, features = ["derive"] }
-tonic = { version = "0.14.2", default-features = false, features = ["codegen", "transport"] }
-tonic-prost = { version = "0.14.2", default-features = false }
+tonic = { version = "0.14.2", default-features = false, features = ["codegen", "transport"], optional = true }
+tonic-prost = { version = "0.14.2", default-features = false, optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.47.1", default-features = false, features = ["rt-multi-thread"] }

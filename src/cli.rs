@@ -93,7 +93,9 @@ pub fn run(args: Args) -> Result<(), Error> {
 
     tonic_prost_build::configure()
         .build_client(args.build_client)
+        .client_mod_attribute(".", r#"#[cfg(feature = "client")]"#)
         .build_server(args.build_server)
+        .server_mod_attribute(".", r#"#[cfg(feature = "server")]"#)
         .build_transport(args.build_client || args.build_server)
         .compile_well_known_types(args.with_well_known_types)
         .out_dir(&compiled_files_dir)
