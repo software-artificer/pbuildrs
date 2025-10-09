@@ -55,7 +55,10 @@ jobs:
         toolchain: stable
     - uses: arduino/setup-protoc@v3
     - name: Use pbuildrs to compile protobuf IDL
-      run: cargo run -- --build-client --build-server --with-well-known-types ./proto/ --output example/src/autogen/
+      run: |
+        cargo run -- --build-client --build-server --with-well-known-types \
+          --with-file-descriptor-set example/src/fds.bin \
+          --output example/src/autogen/ ./proto/
     - name: Verify that generated code actually works
       run: cargo test --all-features
       working-directory: example/
