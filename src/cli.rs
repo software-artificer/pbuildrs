@@ -24,6 +24,9 @@ pub struct Args {
     /// Specify a path where to create a temporary working directory
     #[arg(long)]
     temp_dir: Option<path::PathBuf>,
+    /// Generate a file descriptor set and store it at the location provided in this argument
+    #[arg(long)]
+    with_file_descriptor_set: Option<path::PathBuf>,
     /// Specify the source path of the protobuf files to compile
     #[arg()]
     source: path::PathBuf,
@@ -91,7 +94,12 @@ pub fn run(args: Args) -> Result<(), Error> {
     let mut includes = args.include_path;
     includes.push(patched_dir);
 
-    tonic_prost_build::configure()
+    let mut builder = tonic_prost_build::configure();
+    if let Some(path) = args.with_file_descriptor_set {
+        builder = builder.file_descriptor_set_path(path);
+    }
+
+    builder
         .build_client(args.build_client)
         .client_mod_attribute(".", r#"#[cfg(feature = "client")]"#)
         .build_server(args.build_server)
@@ -109,6 +117,7 @@ pub fn run(args: Args) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
+    use prost::Message;
     use std::{fs, path};
 
     #[test]
@@ -116,6 +125,8 @@ mod tests {
         let dst = tempfile::TempDir::new().expect("Failed to create test destination directory");
 
         let src = path::PathBuf::from("./proto");
+
+        let fds_path = dst.path().join("file_descriptor_set.bin");
 
         let args = super::Args {
             build_client: true,
@@ -125,6 +136,7 @@ mod tests {
             output: dst.path().to_owned(),
             source: src,
             temp_dir: None,
+            with_file_descriptor_set: Some(fds_path.clone()),
         };
 
         super::run(args).expect("Failed to run the application");
@@ -180,6 +192,20 @@ mod tests {
         assert_eq!(
             result, "pub mod ariel;\n",
             "Invalid generated module: disney"
+        );
+
+        let fds = fs::read(fds_path).expect("Failed to open the file descriptor set file");
+        let fds = tonic_prost_build::FileDescriptorSet::decode(fds.as_slice())
+            .expect("Failed to decode the file descriptor set");
+        let ferris = fds
+            .file
+            .iter()
+            .find(|fd| fd.name.as_ref().is_some_and(|f| f == "crabs/Ferris.proto"))
+            .expect("File descriptor set didn't contain Ferris.proto");
+        assert_eq!(
+            ferris.package,
+            Some("crabs".to_string()),
+            "Expected Ferris message package to be `crabs`"
         );
     }
 }
