@@ -222,6 +222,7 @@ name = "pbuildrs"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "prost",
  "rayon",
  "tempfile",
  "thiserror",

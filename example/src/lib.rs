@@ -4,6 +4,9 @@ pub use autogen::*;
 
 pub struct CrabService;
 
+#[cfg(feature = "file-descriptors")]
+pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("fds.bin");
+
 #[cfg(feature = "server")]
 #[tonic::async_trait]
 impl crabs::crab_service_server::CrabService for CrabService {
@@ -157,6 +160,19 @@ mod tests {
             };
 
             assert_eq!(ferris.r#type, crabs::FerrisType::Original.into());
+        }
+    }
+
+    #[cfg(feature = "file-descriptors")]
+    mod file_descriptor_set {
+        use prost::Message;
+
+        #[test]
+        fn is_generated_properly() {
+            assert!(
+                prost_types::FileDescriptorSet::decode(crate::FILE_DESCRIPTOR_SET).is_ok(),
+                "Generated descriptor set failed to properly decode"
+            );
         }
     }
 }
