@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
-clap = { version = "4.5.50", default-features = false, features = ["derive", "help", "std", "usage"] }
+clap = { version = "4.5.51", default-features = false, features = ["derive", "help", "std", "usage"] }
 rayon = { version = "1.11.0", default-features = false }
 tempfile = { version = "3.21.0", default-features = false }
 thiserror = { version = "2.0.16", default-features = false, features = ["std"] }
