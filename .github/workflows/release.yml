@@ -18,17 +18,15 @@ jobs:
       env:
         RUSTFLAGS: -C target-feature=+crt-static
     - name: Create the release archive
-      run: tar -cvjf "pbuildrs-${{ github.ref_name }}-x86_64-linux.tar.bz2" pbuildrs
+      run: zip -9 "pbuildrs-${{ github.ref_name }}-x86_64-linux.zip" pbuildrs
       working-directory: target/x86_64-unknown-linux-gnu/release/
     - uses: actions/upload-artifact@v5
       with:
         name: x86_64-linux
-        path: "target/x86_64-unknown-linux-gnu/release/pbuildrs-${{ github.ref_name }}-x86_64-linux.tar.bz2"
+        path: "target/x86_64-unknown-linux-gnu/release/pbuildrs-${{ github.ref_name }}-x86_64-linux.zip"
         if-no-files-found: error
         retention-days: 1
         compression-level: 0
-      env:
-        BZIP: --best
 
   build-macos:
     runs-on: macos-latest
@@ -72,6 +70,6 @@ jobs:
           --prerelease --title "Release ${{ github.ref_name }} draft" \
           --repo "${{ github.repository }}" \
           "pbuildrs-${{ github.ref_name }}-aarch64-darwin.zip" \
-          "pbuildrs-${{ github.ref_name }}-x86_64-linux.tar.bz2"
+          "pbuildrs-${{ github.ref_name }}-x86_64-linux.zip"
       env:
         GH_TOKEN: ${{ github.token }}
