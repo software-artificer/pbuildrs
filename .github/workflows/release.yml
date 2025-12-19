@@ -58,10 +58,10 @@ jobs:
     - build-linux
     - build-macos
     steps:
-    - uses: actions/download-artifact@v6
+    - uses: actions/download-artifact@v7
       with:
         name: aarch64-darwin
-    - uses: actions/download-artifact@v6
+    - uses: actions/download-artifact@v7
       with:
         name: x86_64-linux
     - name: Create a GitHub release
