@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 clap = { version = "4.5.53", default-features = false, features = ["derive", "help", "std", "usage"] }
 rayon = { version = "1.11.0", default-features = false }
-tempfile = { version = "3.21.0", default-features = false }
+tempfile = { version = "3.24.0", default-features = false }
 thiserror = { version = "2.0.16", default-features = false, features = ["std"] }
 tonic-prost-build = "0.14.1"
 walkdir = { version = "2.5.0", default-features = false }
