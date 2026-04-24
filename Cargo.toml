@@ -10,7 +10,7 @@ clap = { version = "4.6.0", default-features = false, features = [
 	"std",
 	"usage",
 ] }
-rayon = { version = "1.11.0", default-features = false }
+rayon = { version = "1.12.0", default-features = false }
 tempfile = { version = "3.27.0", default-features = false }
 thiserror = { version = "2.0.18", default-features = false, features = ["std"] }
 tonic-prost-build = "0.14.5"
